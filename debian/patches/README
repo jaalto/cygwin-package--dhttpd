@@ -1,0 +1,32 @@
+Debian dhttpd_1.02a-16.diff
+
+a)
+- Debian packaging is confusing. There are local changes and
+  *.dpatch files, that can't be used at all (they don't apply).
+- Probably the local changes are the "dpatch", so only pre-patch is used.
+  filterdiff -i '*/src/*' dhttpd_1.02a-16.diff
+  > 01-Debian-pre-patch-dhttpd_1.02a-16.patch
+b)
+- Debian includes changes to *.1 manual page:
+  filterdiff -i '*.1' dhttpd_1.02a-16.diff > patches/99-dhttpd.1.patch
+
+[not used. Converted into *.diff extension]
+
+dhttpd-1.02a/debian/patches/bind_addr.diff
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-decoding.author
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-decoding.patch
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-last-mod-and-head-support.author
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-last-mod-and-head-support.patch
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-user-dir.patch
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-whatis.author
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-whatis.patch
+dhttpd-1.02a/debian/patches/dhttpd-1.02a-www-data.patch
+
+[pre-patch made from these local chnages in Debian diff]
+
+dhttpd-1.02a/src/Makefile
+dhttpd-1.02a/src/config.hh
+dhttpd-1.02a/src/httpsock.cc
+dhttpd-1.02a/src/main.cc
+dhttpd-1.02a/src/socket.cc
+dhttpd-1.02a/src/socket.hh

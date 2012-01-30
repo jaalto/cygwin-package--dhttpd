@@ -1,0 +1,136 @@
+Package: dhttpd
+Version: 1.02a-13
+Followup-For: Bug #293234
+
+I don't know where my previous patch vanished, but I just noticed that
+the dhttpd 1.02a-13 does not include the new feature. Here is the patch
+again.
+
+
+2005-02-03  Jari Aalto  <jari.aaltot@cante.net>
+
+	* main.cc (main): Documented new '-r' option. Options '-h' now
+	displays options '-r' too.
+
+2005-02-02  root  <jari.aaltot@cante.net>
+
+	* httpsock.cc: Added extern ROOT_DIR.
+	(error): Use ROOT_DIR, not WEBDIRPREFIX.
+
+	* main.cc 
+	(top level): Added char ROOT_DIR[]. Default value is initialized from
+	WEBDIRPREFIX	
+	(main): Added option '-r' to select ROOT WWW dir.
+
+
+Only in src: ChangeLog
+Only in src: dhttpd
+diff -u src.orig/httpsock.cc src/httpsock.cc
+--- src.orig/httpsock.cc	2005-02-02 16:04:18.000000000 +0200
++++ src/httpsock.cc	2005-02-02 16:43:05.000000000 +0200
+@@ -45,6 +45,8 @@
+ #define NOT_FOUND 2
+ #define NOT_MOD 3
+ 
++extern char ROOT_DIR[];
++
+ char *dayName[] = {
+ 	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+ };
+@@ -190,7 +192,8 @@
+ 	fprintf( out, "Content-type: text/html\r\n" );
+ 	fprintf( out, "\r\n" );
+ 
+-	asprintf( &file, WEBDIRPREFIX"/..ERROR%i.html", num );
++	asprintf( &file, "%s/..ERROR%i.html", ROOT_DIR, num );
++
+ 	in = fopen( file, "r" );
+ 	if( in!=NULL )
+ 	{
+@@ -519,7 +522,7 @@
+         char *decodedfile = decodeURI (file);
+ 	char *file2;
+ 	asprintf( &file2, "%s%s%s%s"
+-		  ,WEBDIRPREFIX
++		  ,ROOT_DIR
+ 		  ,file[ 0 ]=='/' ? "" : "/"
+ 		  ,decodedfile ? decodedfile : file
+ 		  ,((file[0]=='\0') || (file[strlen(file)-1]=='/'))?
+Only in src: httpsock.o
+diff -u src.orig/main.cc src/main.cc
+--- src.orig/main.cc	2005-02-02 16:04:18.000000000 +0200
++++ src/main.cc	2005-02-02 16:42:48.000000000 +0200
+@@ -33,9 +33,15 @@
+ #include "socket.hh"
+ #include "httpsock.hh"
+ #include "version.hh"
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
+ 
+ int numProc;
+ 
++const int ROOT_MAX_LEN = 500;
++char ROOT_DIR[ROOT_MAX_LEN] = WEBDIRPREFIX;
++
+ void handleChildTerm( int )
+ {
+ 	if( waitpid( 0, NULL, WNOHANG )>0 )
+@@ -97,7 +103,7 @@
+ 
+ 	for( ;; )
+ 	{
+-		o = getopt( argc, argv, "p:hd" );
++		o = getopt( argc, argv, "p:hdr:" );
+ 		if( o==-1 )
+ 		{
+ 			break;
+@@ -118,6 +124,27 @@
+ 			case 'p':
+ 				sscanf( optarg, "%i", &portnum );
+ 				break;
++			case 'r':
++			        if ( strlen(optarg) > ROOT_MAX_LEN )
++			        {
++				    //  Prevent overflows
++				    fprintf(stderr, 
++					    "[ERROR] Too long WWW root path: %s\n"
++					    , optarg );
++
++				    exit(1);
++			        }
++
++			        if ( optarg[strlen(optarg) -1] == '/' )
++			        {
++				    fprintf(stderr, 
++					    "[ERROR] No trailing slash allowed: %s\n"
++					    , optarg );
++				    exit(1);
++				}
++
++				sscanf( optarg, "%s", ROOT_DIR );
++				break;
+ 			case 'd':
+ 				nofork=true;
+ 				break;
+Only in src: main.o
+Only in src: socket.o
+
+
+
+-- System Information:
+Debian Release: 3.1
+  APT prefers unstable
+  APT policy: (500, 'unstable'), (500, 'testing'), (1, 'experimental')
+Architecture: i386 (i686)
+Kernel: Linux 2.6.11-1-686
+Locale: LANG=C, LC_CTYPE=C (charmap=ISO-8859-1) (ignored: LC_ALL set to en_US)
+
+Versions of packages dhttpd depends on:
+ii  libc6                       2.3.2.ds1-21 GNU C Library: Shared libraries an
+ii  libgcc1                     1:3.4.3-12   GCC support library
+ii  libstdc++5                  1:3.3.5-12   The GNU Standard C++ Library v3
+
+-- no debconf information
+
+

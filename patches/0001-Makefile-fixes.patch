@@ -1,0 +1,85 @@
+ Makefile           |   44 ++++++++++++++++++++++++++++++++++++++++++++
+ src/Makefile.linux |    7 +++----
+ 2 files changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..a95ef05
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,44 @@
++#!/usr/bin/make -f
++
++ifneq (,)
++This makefile requires GNU Make.
++endif
++
++DESTDIR		=
++prefix		= /usr
++exec_prefix	= $(prefix)
++man_prefix	= $(prefix)/share
++
++PACKAGE		= dhttpd
++
++INSTALL		= /usr/bin/install
++INSTALL_BIN	= $(INSTALL) -m 755
++INSTALL_DATA	= $(INSTALL) -m 644
++INSTALL_OBJS	= src/$(PACKAGE)
++
++MANDIR		= $(DESTDIR)$(man_prefix)/man/man1
++MANDIR5		= $(DESTDIR)$(man_prefix)/man/man5
++MANDIR8		= $(DESTDIR)$(man_prefix)/man/man8
++BINDIR		= $(DESTDIR)$(exec_prefix)/bin
++
++all: $(PACKAGE)
++
++$(PACKAGE):
++	$(MAKE) -C src -f Makefile.linux CC="$(CC)"
++
++clean:
++	$(MAKE) -C src clean
++
++install-bin:
++	$(INSTALL_BIN) -d $(BINDIR)
++	$(INSTALL_BIN) -s $(INSTALL_OBJS) $(BINDIR)
++
++install-man:
++	$(INSTALL_BIN) -d $(MANDIR)
++	$(INSTALL_DATA) *.1 $(MANDIR)
++
++install: all install-bin install-man
++
++.PHONY: clean distclean install install-man install-bin
++
++# End of file
+diff --git a/src/Makefile.linux b/src/Makefile.linux
+index a8140cf..9ed2c73 100644
+--- a/src/Makefile.linux
++++ b/src/Makefile.linux
+@@ -1,7 +1,7 @@
+ # if compiling for SunOS, you need to add -lsocket to the LIBS variable
+ 
+ SH	= /bin/sh
+-CC	= gcc
++CXX	= g++
+ MAKEFILE= Makefile
+ CFLAGS	= -O2 --pipe
+ LIBS	=
+@@ -9,15 +9,14 @@ LIBS	=
+ OBJECTS = main.o socket.o httpsock.o
+ 
+ .cc.o:
+-	$(CC) $(CFLAGS) -c -o $*.o $<
++	$(CXX) $(CFLAGS) -c -o $*.o $<
+ 
+ all:	compile dhttpd
+ 
+ compile: $(OBJECTS)
+ 
+ dhttpd: $(OBJECTS)
+-	$(CC) -o dhttpd $(OBJECTS) $(LIBS)
+-	strip dhttpd
++	$(CXX) -o dhttpd $(OBJECTS) $(LIBS)
+ 
+ clean:
+ 	rm dhttpd $(OBJECTS)

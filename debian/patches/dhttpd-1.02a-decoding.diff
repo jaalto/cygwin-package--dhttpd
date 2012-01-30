@@ -1,0 +1,60 @@
+diff -u dhttpd-1.02a/src/httpsock.cc modified_dhttpd/src/httpsock.cc
+--- dhttpd-1.02a/src/httpsock.cc	2004-07-19 11:28:31.000000000 +0300
++++ modified_dhttpd/src/httpsock.cc	2004-07-19 11:29:42.000000000 +0300
+@@ -434,6 +434,32 @@
+ 	return OK;
+ }
+ 
++static char * decodeURI (const char *uri)
++{
++  char *b, *buffer;
++  buffer = b = static_cast<char *>(malloc (strlen (uri) + 1));
++  
++#define ASCII_TO_XDIGIT(c) (((c) >= '0' && (c) <= '9') \
++  ? ((c) - '0') \
++  : ((c) - 'a' + 0x0a))
++  
++  if (buffer) {
++    while (*uri) {
++      if (*uri == '%' && isxdigit (uri[1]) && isxdigit (uri[2])) {
++        *b++ = (ASCII_TO_XDIGIT (uri[1]) << 4) | ASCII_TO_XDIGIT (uri[2]);
++        uri += 3;
++      } else
++        *b++ = *uri++;
++    }
++    
++    *b = '\0';
++    
++    return buffer;
++  }
++  
++  return NULL;
++}
++
+ void HttpSocket::handle()
+ {
+ 	char line[ 1024 ];
+@@ -490,18 +516,22 @@
+ 
+  	modTime = strcmp( ifmod, "" ) ? ifmod : (char*) NULL;
+  	
++        char *decodedfile = decodeURI (file);
+ 	char *file2;
+ 	asprintf( &file2, "%s%s%s%s"
+ 		  ,WEBDIRPREFIX
+ 		  ,file[ 0 ]=='/' ? "" : "/"
+-		  ,file
++		  ,decodedfile ? decodedfile : file
+ 		  ,((file[0]=='\0') || (file[strlen(file)-1]=='/'))?
+ 		  "index.html"
+ 		  :
+ 		  ""
+ 		  );
++        
+ 	status = sendFile( io, file2, modTime, simple, headOnly );
+ 	free(file2);
++        if (decodedfile) free (decodedfile);
++        
+ 	if( status )
+ 	{
+ 	    sendError( io, status );

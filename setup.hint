@@ -1,0 +1,5 @@
+sdesc: "Minimal secure webserver without cgi-bin support"
+ldesc: "No nonsense webserser. No external programs, memory efficient, quick
+and no configuration necessary."
+category: Web
+requires: cygwin

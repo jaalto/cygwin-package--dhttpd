@@ -1,0 +1,32 @@
+From: Simo Melenius <simo.melenius@citec.fi>
+Subject: Patch: dhttpd URI decoding
+
+Hi!
+
+I'm contacting you since I didn't seem to find a valid address of the
+original author and you maintain the dhttpd package for Debian.
+
+dhttpd doesn't do URI %HH decoding. Since I use it internally to serve
+files off my workstation and those files generally have e.g. spaces in
+their file names, dhttpd didn't do.
+
+***
+
+Attached is a simple patch that finds any proper "%HH" hex number
+sequences in the URI part of the GET line and substitutes them with the
+denoted octet. It does NOT do
+
+- UTF8 decoding
+- security checking (e.g. reappearance of ../ or // in the URI)
+
+because dhttpd doesn't seem to do them either, and I wanted to stay as
+transparent to the program as possible.
+
+The patch is against v. 1.02a found in Debian testing currently. Feel
+free to include this in Debian patch set, forward to the upstream author
+if you know how to contact him, or simply ignore it. I just wanted to
+share my five minutes of hacking to upstream somewhere.
+
+
+br,
+S

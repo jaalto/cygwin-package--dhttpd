@@ -1,0 +1,67 @@
+dhttpd
+------------------------------------------
+
+Minimal secure webserver without cgi-bin support
+
+No nonsense webserser. No external programs, memory efficient, quick
+and no configuration necessary.
+
+Notes:
+  1. /var/www is hardwired into the sources. It cannot be changed from
+     command line
+  2. The directory MUST contain index.html or you get 404
+
+Runtime requirements:
+  cygwin
+
+Build requirements:
+  cygwin
+
+Canonical homepage:
+  http://packages.debian.org/dhttpd
+
+Canonical download:
+  See above
+
+Version control repository:
+
+Mailing list:
+
+Forum / Wiki:
+
+IRC channel:
+
+Upstream contact:
+  Author: David A. Bartold <dbartold@ccsi.com> (Probably not exists)
+  Bugs: David A. Bartold <dbartold@ccsi.com> (Probably not exists)
+
+License:
+  GPL
+
+Language:
+  C
+
+------------------------------------
+
+Build instructions:
+  unpack dhttpd-*-src.tar.bz2
+    if you use setup to install this src package, it will be
+    unpacked under /usr/src automatically
+  cd /usr/src
+  ./dhttpd*.sh all
+
+-------------------------------------------
+
+Files included in the binary distro:
+  See content of *.tar.gz
+
+------------------
+
+Port Notes:
+- No toplevel Makefile. Wrote one.
+
+----- version 1.02a-1 -----
+- Initial release 2008-02-28 Jari Aalto
+
+Cygwin port maintained by: Jari Aalto <jari.aalto@cante.net>
+Copyright (C) 2008 Jari Aalto; Licensed under GPL v2 or later

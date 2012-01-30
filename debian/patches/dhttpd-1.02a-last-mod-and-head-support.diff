@@ -1,0 +1,175 @@
+--- dhttpd.n/src/httpsock.cc	2002-12-28 15:06:30.000000000 +0100
++++ dhttpd-1.02a/src/httpsock.cc	2002-12-28 15:04:58.000000000 +0100
+@@ -337,7 +337,26 @@
+ 	return 1;
+ }
+ 
+-int sendFile( FILE *out, char *name, char *modTime, int n )
++void sendNotMod( FILE *out )
++{
++	fprintf( out, "HTTP/1.0 304 Not modified\r\n" );
++	fprintf( out, "Date: %s\r\n",curTime() );
++	fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
++	fprintf( out, "\r\n" );
++}
++
++void sendHead( FILE *out, char *name, time_t tmMod, long filesize )
++{
++	fprintf( out, "HTTP/1.0 200 OK\r\n" );
++	fprintf( out, "Date: %s\n", curTime() );
++	fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
++	fprintf( out, "Content-type: %s\r\n", guessType( name ) );
++	fprintf( out, "Last-modified: %s\r\n", getMimeTime( gmtime( &tmMod ) ) ); 
++	fprintf( out, "Content-length: %ld\r\n", filesize );
++	fprintf( out, "\r\n" );
++}
++
++int sendFile( FILE *out, char *name, char *modTime, bool simple, bool headOnly )
+ {
+ 	FILE *in;
+ 	struct stat fs;
+@@ -376,44 +395,40 @@
+ 	
+ 	tmMod = gmtime( &fs.st_mtime );
+ 	
+-	if( modTime!=NULL && useCache( tmMod, modTime ) )
++	/* HTTP ver 0.9 (simple) does not support if-modified-since */
++	if( !simple && modTime!=NULL && useCache( tmMod, modTime ) )
+ 	{
+ 		fclose( in );
+-		fprintf( out, "HTTP/1.0 304 Not modified\r\n" );
+-		fprintf( out, "Date: %s\r\n",curTime() );
+-		fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
+-		fprintf( out, "\r\n" );
++		sendNotMod( out );
+ 		return OK;
+ 	}
+ 	
+-	if( n>2 ) {
+ #ifdef HAVE_SENDFILE
+-	setsockopt(fileno(out),SOL_TCP,TCP_CORK,&cork,sizeof(cork));
++	        setsockopt(fileno(out),SOL_TCP,TCP_CORK,&cork,sizeof(cork));
+ #endif
+-	fprintf( out, "HTTP/1.0 200 OK\r\n" );
+-	fprintf( out, "Date: %s\n", curTime() );
+-	fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
+-	fprintf( out, "Content-type: %s\r\n", guessType( name ) );
+-	fprintf( out, "Last-modified: %s\r\n", getMimeTime( tmMod ) );
+-	fprintf( out, "Content-length: %ld\r\n", fs.st_size );
+-	fprintf( out, "\r\n" );
++	/* HTTP ver 0.9 (simple) does not expect any headers */
++	if ( !simple )
++	{
++       	        sendHead( out, name, fs.st_mtime, fs.st_size );
+ 	}
+-
+-#ifdef HAVE_SENDFILE
+-	fstat(fileno(in),&st);
+ 	fflush(out);
+-	sendfile(fileno(out),fileno(in),&offset,st.st_size);
+-	cork=0;
+-	setsockopt(fileno(out),SOL_TCP,TCP_CORK,&cork,sizeof(cork));
+-#else
+-	do
++	if ( !headOnly )
+ 	{
+-		num = fread( buf, 1, 1024, in );
+-		fwrite( buf, 1, num, out );
+-	}
+-	while( num );
++#ifdef HAVE_SENDFILE
++		fstat(fileno(in),&st);
++		fflush(out);
++		sendfile(fileno(out),fileno(in),&offset,st.st_size);
++		cork=0;
++		setsockopt(fileno(out),SOL_TCP,TCP_CORK,&cork,sizeof(cork));
++#else
++		do
++		{
++			num = fread( buf, 1, 1024, in );
++			fwrite( buf, 1, num, out );
++		}
++		while( num );
+ #endif
+-	
++        }	
+ 	fclose( in );
+ 	
+ 	return OK;
+@@ -429,17 +444,24 @@
+ 	char *modTime;
+ 	char *str;
+ 	
+-	int num;
++	int numTokens;
+ 	int status;
+ 	char *pos;
++	bool simple, headOnly;
+ 
+ 	str = fgets( line, 1024, io );
+-	num = sscanf( line, "%s %s %s", cmd, file, ver );
+-
++	numTokens = sscanf( line, "%s %s %s", cmd, file, ver );
++       simple = (numTokens == 2);
++	headOnly = !strcmp( cmd, "HEAD" );
++	if( ( strcmp( cmd, "GET" ) && !headOnly ) || ( numTokens < 2 ) ) 
++	{
++		screwed( io );
++		return;
++	}
+ 	ifmod[0]='\0';
+ 	
+-	/* Accept HTTP/0.9 requests properly */
+-	if (num == 3) {
++	/* HTTP/0.9 (simple) requests don't send headers */
++	if ( !simple ) {
+ 	do
+ 	{
+ 		str = fgets( line, 1024, io );
+@@ -466,29 +488,23 @@
+          * operating system such as SunOS    */
+ 	fflush( io );
+ 
+-	modTime = strcmp( ifmod, "" ) ? ifmod : (char*) NULL;
+-	
+-	if( !strcmp( cmd, "GET" ) && (num >=2) )
+-	{
+-		char *file2;
+-		asprintf( &file2, "%s%s%s%s"
+-			,WEBDIRPREFIX
+-			,file[ 0 ]=='/' ? "" : "/"
+-			,file
+-			,((file[0]=='\0') || (file[strlen(file)-1]=='/'))?
+-				"index.html"
+-			:
+-				""
+-			);
+-		status = sendFile( io, file2, modTime, num );
+-		free(file2);
+-		if( status )
+-		{
+-				sendError( io, status );
+-		}
+-	}
+-	else
++ 	modTime = strcmp( ifmod, "" ) ? ifmod : (char*) NULL;
++ 	
++	char *file2;
++	asprintf( &file2, "%s%s%s%s"
++		  ,WEBDIRPREFIX
++		  ,file[ 0 ]=='/' ? "" : "/"
++		  ,file
++		  ,((file[0]=='\0') || (file[strlen(file)-1]=='/'))?
++		  "index.html"
++		  :
++		  ""
++		  );
++	status = sendFile( io, file2, modTime, simple, headOnly );
++	free(file2);
++	if( status )
+ 	{
+-		screwed( io );
++	    sendError( io, status );
+ 	}
++	
+ }

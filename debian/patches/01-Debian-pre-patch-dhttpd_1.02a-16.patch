@@ -1,0 +1,854 @@
+From db6bbcb1970457531bc7a2d41103ce26aac89733 Mon Sep 17 00:00:00 2001
+From: Jari Aalto <jari.aalto@cante.net>
+Date: Sat, 1 Mar 2008 22:53:10 +0200
+Subject: [PATCH] Debian pre-patch: dhttpd_1.02a-16
+
+Signed-off-by: Jari Aalto <jari.aalto@cante.net>
+---
+ src/Makefile    |   13 ++-
+ src/config.hh   |   11 ++-
+ src/httpsock.cc |  247 +++++++++++++++++++++++++++++++++++++------------------
+ src/main.cc     |   83 ++++++++++++++----
+ src/socket.cc   |   35 +++++---
+ src/socket.hh   |    8 +-
+ 6 files changed, 274 insertions(+), 123 deletions(-)
+
+diff --git a/src/Makefile b/src/Makefile
+index a8140cf..5040cc0 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -1,11 +1,19 @@
+ # if compiling for SunOS, you need to add -lsocket to the LIBS variable
+ 
+ SH	= /bin/sh
+-CC	= gcc
++CC	= g++
+ MAKEFILE= Makefile
+-CFLAGS	= -O2 --pipe
++CFLAGS	= -O2 -pipe -Wall -Wshadow
+ LIBS	=
+ 
++ifneq (,$(findstring debug,$(DEB_BUILD_OPTIONS)))
++  CFLAGS += -g
++endif
++
++ifeq ($(shell uname),Linux)
++  CFLAGS += -DHAVE_SENDFILE
++endif
++
+ OBJECTS = main.o socket.o httpsock.o
+ 
+ .cc.o:
+@@ -17,7 +25,6 @@ compile: $(OBJECTS)
+ 
+ dhttpd: $(OBJECTS)
+ 	$(CC) -o dhttpd $(OBJECTS) $(LIBS)
+-	strip dhttpd
+ 
+ clean:
+ 	rm dhttpd $(OBJECTS)
+diff --git a/src/config.hh b/src/config.hh
+index 794b6df..612ffc8 100644
+--- a/src/config.hh
++++ b/src/config.hh
+@@ -1,15 +1,22 @@
+ /* Set this as the user id number you want dhttpd to use when    *
+  * starting it as root.  You can get this info from /etc/passwd. */
+-#define UID		65534
++#define UID		33
++//#define UID		65534
+ 
+ /* Set this to the proper group id number of UID above.          */
+-#define GID		65534
++#define GID		33
++//#define GID		65534
+ 
+ /* Set your default port number.  If you aren't running as       *
+  * root, you must use a value >= 1024, such as 8080.             */
+ #define DEFAULTPORT	80
+ 
++/* Set default address to listen to.  (0.0.0.0 for any)          */
++#define DEFAULTBINDADDR "0.0.0.0"
++
+ /* This is the directory where the web pages are located.        */
++/* Note:  buffer overflow problems may exist if WEBDIRPREFIX is  *
++ * longer than 150 characters or so.                             */
+ #define WEBDIRPREFIX	"/var/www"
+ 
+ /* This defines the maximum number of child processes (i.e.      *
+diff --git a/src/httpsock.cc b/src/httpsock.cc
+index 4f9c0c2..c3468d9 100644
+--- a/src/httpsock.cc
++++ b/src/httpsock.cc
+@@ -17,15 +17,24 @@
+  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+  */
+ 
++#define _GNU_SOURCE
++
+ #include <ctype.h>
+ #include <errno.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <time.h>
+ #include <unistd.h>
++       #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <sys/stat.h>
+ 
++#ifdef HAVE_SENDFILE
++#include <netinet/tcp.h>
++#include <sys/sendfile.h>
++#endif
++
+ #include "config.hh"
+ #include "socket.hh"
+ #include "httpsock.hh"
+@@ -36,6 +45,8 @@
+ #define NOT_FOUND 2
+ #define NOT_MOD 3
+ 
++extern char ROOT_DIR[];
++
+ char *dayName[] = {
+ 	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+ };
+@@ -52,10 +63,10 @@ struct AssocType
+ 
+ AssocType assocNames[] =
+ {
+-	{ ".mp2", "audio/x-mpeg" },
+-	{ ".mpa", "audio/x-mpeg" },
+-	{ ".abs", "audio/x-mpeg" },
+-	{ ".mpega", "audio/x-mpeg" },
++	{ ".mp2", "audio/mpeg" },
++	{ ".mpa", "audio/mpeg" },
++	{ ".abs", "audio/mpeg" },
++	{ ".mpega", "audio/mpeg" },
+ 	{ ".mpeg", "video/mpeg" },
+ 	{ ".mpg", "video/mpeg" },
+ 	{ ".mpe", "video/mpeg" },
+@@ -65,14 +76,15 @@ AssocType assocNames[] =
+ 	{ ".bin", "application/octet-stream" },
+ 	{ ".com", "application/octet-stream" },
+ 	{ ".dll", "application/octet-stream" },
+-	{ ".bmp", "image/x-MS-bmp" },
++	{ ".bmp", "image/bitmap" },
+ 	{ ".exe", "application/octet-stream" },
+-	{ ".mid", "audio/x-midi" },
+-	{ ".midi", "audio/x-midi" },
++	{ ".mid", "audio/midi" },
++	{ ".midi", "audio/midi" },
+ 	{ ".htm", "text/html" },
+ 	{ ".html", "text/html" },
+ 	{ ".txt", "text/plain" },
+ 	{ ".gif", "image/gif" },
++	{ ".css", "text/css" },
+ 	{ ".tar", "application/x-tar" },
+ 	{ ".jpg", "image/jpeg" },
+ 	{ ".jpeg", "image/jpeg" },
+@@ -82,17 +94,22 @@ AssocType assocNames[] =
+ 	{ ".sys", "application/octet-stream" },
+ 	{ ".wav", "audio/x-wav" },
+ 	{ ".xbm", "image/x-xbitmap" },
+-	{ ".zip", "application/x-zip" },
++	{ ".zip", "application/zip" },
+ 	{ ".deb", "application/x-debian-package" },
++	{ ".ps", "application/postscript" },
++	{ ".pdf", "application/pdf" },
++	{ ".xml", "text/xml" },
++	{ ".xml", "text/xml" },
++	{ ".swf", "application/x-shockwave-flash" },
+ 	{ NULL, NULL }
+ };
+ 
+ char *getMimeTime( tm *t )
+ {
+ 	static char out[ 44 ];
+-	
++
+ 	/* Format:  Day, 01 Mon 1999 01:01:01 GMT */
+-	
++
+ 	sprintf( out, "%s, %02i %s %04i %02i:%02i:%02i GMT",
+ 		dayName[ t->tm_wday ], t->tm_mday, monthName[ t->tm_mon ], t->tm_year + 1900,
+ 		t->tm_hour, t->tm_min, t->tm_sec
+@@ -113,9 +130,9 @@ char *guessType( char *f )
+ 	int flen;
+ 	int tlen;
+ 	int g;
+-	
++
+ 	flen = strlen( f );
+-	
++
+ 	for( g=0; assocNames[ g ].ext; g++ )
+ 	{
+ 		tlen = strlen( assocNames[ g ].ext );
+@@ -127,7 +144,7 @@ char *guessType( char *f )
+ 			}
+ 		}
+ 	}
+-	
++
+ 	return "application/x-unknown";
+ }
+ 
+@@ -142,7 +159,7 @@ int findMonth( char *s )
+ 			return g;
+ 		}
+ 	}
+-	
++
+ 	return -1;
+ }
+ 
+@@ -152,36 +169,36 @@ int badFileName( char *s )
+ 	{
+ 		return 1;
+ 	}
+-	
++
+ 	if( strstr( s, "//" ) )
+ 	{
+ 		return 1;
+ 	}
+-	
++
+ 	return 0;
+ }
+ 
+-void error( FILE *out, int num, char *stat, char *msg, char *str )
++void error( FILE *out, int num, char *status, char *msg, char *str )
+ {
+ 	FILE *in;
+ 	int numch;
+-	char file[ 1200 ];
++	char *file;
+ 	char buf[ 1024 ];
+ 	struct stat fs;
+ 
+-	fprintf( out, "HTTP/1.0 %s\r\n", stat );
++	fprintf( out, "HTTP/1.0 %s\r\n", status );
+ 	fprintf( out, "Date: %s\n", curTime() );
+ 	fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
+-//	fprintf( out, "MIME-version: 1.0\r\n" );
+ 	fprintf( out, "Content-type: text/html\r\n" );
+ 	fprintf( out, "\r\n" );
+ 
+-	sprintf( file, "%s/..ERROR%i.html", WEBDIRPREFIX, num );
++	asprintf( &file, "%s/..ERROR%i.html", ROOT_DIR, num );
++
+ 	in = fopen( file, "r" );
+ 	if( in!=NULL )
+ 	{
+ 		fstat( fileno( in ), &fs );
+-	
++
+ 		if( ( (fs.st_mode&S_IFMT)==S_IFREG ) && !( fs.st_mode&S_IFDIR ) )
+ 		{
+ 			do
+@@ -192,6 +209,7 @@ void error( FILE *out, int num, char *stat, char *msg, char *str )
+ 			while( numch );
+ 
+ 			fclose( in );
++			free(file);
+ 			return;
+ 		}
+ 		fclose( in );
+@@ -200,6 +218,7 @@ void error( FILE *out, int num, char *stat, char *msg, char *str )
+ 	fprintf( out, "<html><head><title>%s: Error %s</title></head>", DHTTPDVERSION, msg );
+ 	fprintf( out, "<h1>%s</h1><hr>", msg );
+ 	fprintf( out, "%s <em>Sorry!</em></body></html>", str );
++	free(file);
+ }
+ 
+ void screwed( FILE *out )
+@@ -225,14 +244,14 @@ void sendError( FILE *out, int status )
+ 				"You do not have permission to access that file."
+ 			);
+ 			break;
+-			
++
+ 		case NOT_FOUND:
+ 			error( out,
+ 				404,
+ 				"404 File Not Found",
+ 				"404: File Not Found!",
+ 				"File specified not found on server.  Check to make sure you have the "
+-				"correct file extension." 
++				"correct file extension."
+ 			);
+ 			break;
+ 	}
+@@ -321,19 +340,44 @@ int useCache( struct tm *modTime, char *s )
+ 	return 1;
+ }
+ 
+-int sendFile( FILE *out, char *name, char *modTime )
++void sendNotMod( FILE *out )
++{
++	fprintf( out, "HTTP/1.0 304 Not modified\r\n" );
++	fprintf( out, "Date: %s\r\n",curTime() );
++	fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
++	fprintf( out, "\r\n" );
++}
++
++void sendHead( FILE *out, char *name, time_t tmMod, long filesize )
++{
++	fprintf( out, "HTTP/1.0 200 OK\r\n" );
++	fprintf( out, "Date: %s\n", curTime() );
++	fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
++	fprintf( out, "Content-type: %s\r\n", guessType( name ) );
++	fprintf( out, "Last-modified: %s\r\n", getMimeTime( gmtime( &tmMod ) ) );
++	fprintf( out, "Content-length: %ld\r\n", filesize );
++	fprintf( out, "\r\n" );
++}
++
++int sendFile( FILE *out, char *name, char *modTime, bool simple, bool headOnly )
+ {
+ 	FILE *in;
+ 	struct stat fs;
+ 	tm *tmMod;
++#ifdef HAVE_SENDFILE
++	off_t offset = 0;
++	struct stat st;
++	int cork=1;
++#else
+ 	char buf[ 1024 ];
+-	int num;
++	int num = 0;
++#endif
+ 
+ 	if( badFileName( name ) )
+ 	{
+ 		return FORBIDDEN;
+ 	}
+-		
++
+ 	in = fopen( name, "r" );
+ 	if( in==NULL )
+ 	{
+@@ -343,69 +387,110 @@ int sendFile( FILE *out, char *name, char *modTime )
+ 		}
+ 		return NOT_FOUND;
+ 	}
+-	
++
+ 	fstat( fileno( in ), &fs );
+-	
++
+ 	if( ( (fs.st_mode&S_IFMT)!=S_IFREG ) || ( fs.st_mode&S_IFDIR ) )
+ 	{
+ 		fclose( in );
+ 		return FORBIDDEN;
+ 	}
+-	
++
+ 	tmMod = gmtime( &fs.st_mtime );
+-	
+-	if( modTime!=NULL && useCache( tmMod, modTime ) )
++
++	/* HTTP ver 0.9 (simple) does not support if-modified-since */
++	if( !simple && modTime!=NULL && useCache( tmMod, modTime ) )
+ 	{
+ 		fclose( in );
+-		fprintf( out, "HTTP/1.0 304 Not modified\r\n" );
+-		fprintf( out, "Date: %s\r\n",curTime() );
+-		fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
+-//		fprintf( out, "MIME-version: 1.0\r\n" );
+-		fprintf( out, "\r\n" );
++		sendNotMod( out );
+ 		return OK;
+ 	}
+-	
+-	fprintf( out, "HTTP/1.0 200 OK\r\n" );
+-	fprintf( out, "Date: %s\n", curTime() );
+-	fprintf( out, "Server: %s\r\n", DHTTPDVERSION );
+-//	fprintf( out, "MIME-version: 1.0\r\n" );
+-	fprintf( out, "Content-type: %s\r\n", guessType( name ) );
+-	fprintf( out, "Last-modified: %s\r\n", getMimeTime( tmMod ) );
+-	fprintf( out, "Content-length: %i\r\n", fs.st_size );
+-	fprintf( out, "\r\n" );
+ 
+-	do
++#ifdef HAVE_SENDFILE
++	        setsockopt(fileno(out),SOL_TCP,TCP_CORK,&cork,sizeof(cork));
++#endif
++	/* HTTP ver 0.9 (simple) does not expect any headers */
++	if ( !simple )
+ 	{
+-		num = fread( buf, 1, 1024, in );
+-		fwrite( buf, 1, num, out );
++		sendHead( out, name, fs.st_mtime, fs.st_size );
+ 	}
+-	while( num );
+-	
++	fflush(out);
++	if ( !headOnly )
++	{
++#ifdef HAVE_SENDFILE
++		fstat(fileno(in),&st);
++		fflush(out);
++		sendfile(fileno(out),fileno(in),&offset,st.st_size);
++		cork=0;
++		setsockopt(fileno(out),SOL_TCP,TCP_CORK,&cork,sizeof(cork));
++#else
++		do
++		{
++			num = fread( buf, 1, 1024, in );
++			fwrite( buf, 1, num, out );
++		}
++		while( num );
++#endif
++        }
+ 	fclose( in );
+-	
++
+ 	return OK;
+ }
+ 
++static char * decodeURI (const char *uri)
++{
++  char *b, *buffer;
++  buffer = b = static_cast<char *>(malloc (strlen (uri) + 1));
++
++#define ASCII_TO_XDIGIT(c) (((c) >= '0' && (c) <= '9') \
++  ? ((c) - '0') \
++  : (tolower ((c)) - 'a' + 0x0a))
++
++  if (buffer) {
++    while (*uri) {
++      if (*uri == '%' && isxdigit (uri[1]) && isxdigit (uri[2])) {
++        *b++ = (ASCII_TO_XDIGIT (uri[1]) << 4) | ASCII_TO_XDIGIT (uri[2]);
++        uri += 3;
++      } else
++        *b++ = *uri++;
++    }
++
++    *b = '\0';
++
++    return buffer;
++  }
++
++  return NULL;
++}
++
+ void HttpSocket::handle()
+ {
+ 	char line[ 1024 ];
+ 	char cmd[ 1024 ];
+ 	char file[ 1200 ];
+ 	char ver[ 1024 ];
+-	char file2[ 1200 ];
+ 	char ifmod[ 1024 ];
+ 	char *modTime;
+ 	char *str;
+-	
+-	int num;
++
++	int numTokens;
+ 	int status;
+ 	char *pos;
++	bool simple, headOnly;
+ 
+ 	str = fgets( line, 1024, io );
+-	num = sscanf( line, "%s %s %s", cmd, file, ver );
+-
+-	strcpy( ifmod, "" );
++	numTokens = sscanf( line, "%s %s %s", cmd, file, ver );
++       simple = (numTokens == 2);
++	headOnly = !strcmp( cmd, "HEAD" );
++	if( ( strcmp( cmd, "GET" ) && !headOnly ) || ( numTokens < 2 ) )
++	{
++		screwed( io );
++		return;
++	}
++	ifmod[0]='\0';
+ 
++	/* HTTP/0.9 (simple) requests don't send headers */
++	if ( !simple ) {
+ 	do
+ 	{
+ 		str = fgets( line, 1024, io );
+@@ -413,7 +498,7 @@ void HttpSocket::handle()
+ 		if( pos!=NULL )
+ 		{
+ 			*pos++ = '\0';
+-				
++
+ 			while( isspace( *pos ) )
+ 			{
+ 				pos++;
+@@ -426,35 +511,33 @@ void HttpSocket::handle()
+ 		}
+ 	}
+ 	while( str!=NULL && strcmp( line, "\r\n" ) && strcmp( line, "\n" ) );
++	}
+ 
+ 	/* This is necessary for some stupid *
+          * operating system such as SunOS    */
+ 	fflush( io );
+ 
+ 	modTime = strcmp( ifmod, "" ) ? ifmod : (char*) NULL;
+-	
+-	if( !strcmp( cmd, "GET" ) )
+-	{
+-		sprintf( file2, "%s%s%s", WEBDIRPREFIX, file[ 0 ]=='/' ? "" : "/", file );
+-		status = sendFile( io, file2, modTime );
+-		if( status )
+-		{
+-			if( !strcmp( file, "/" ) )
+-			{
+-				sprintf( file2, "%s/index.html", WEBDIRPREFIX );
+-				if( sendFile( io, file2, modTime ) )
+-				{
+-					sendError( io, status );
+-				}
+-			}
+-			else
+-			{
+-				sendError( io, status );
+-			}
+-		}
+-	}
+-	else
++
++        char *decodedfile = decodeURI (file);
++	char *file2;
++	asprintf( &file2, "%s%s%s%s"
++		  ,ROOT_DIR
++		  ,file[ 0 ]=='/' ? "" : "/"
++		  ,decodedfile ? decodedfile : file
++		  ,((file[0]=='\0') || (file[strlen(file)-1]=='/'))?
++		  "index.html"
++		  :
++		  ""
++		  );
++
++	status = sendFile( io, file2, modTime, simple, headOnly );
++	free(file2);
++        if (decodedfile) free (decodedfile);
++
++	if( status )
+ 	{
+-		screwed( io );
++	    sendError( io, status );
+ 	}
++
+ }
+diff --git a/src/main.cc b/src/main.cc
+index 6ba3404..221587e 100644
+--- a/src/main.cc
++++ b/src/main.cc
+@@ -23,6 +23,8 @@
+ #include <signal.h>
+ #include <stdio.h>
+ #include <unistd.h>
++#include <syslog.h>
++#include <stdlib.h>
+ #include <sys/socket.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
+@@ -31,9 +33,15 @@
+ #include "socket.hh"
+ #include "httpsock.hh"
+ #include "version.hh"
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
+ 
+ int numProc;
+ 
++const int ROOT_MAX_LEN = 500;
++char ROOT_DIR[ROOT_MAX_LEN] = WEBDIRPREFIX;
++
+ void handleChildTerm( int )
+ {
+ 	if( waitpid( 0, NULL, WNOHANG )>0 )
+@@ -43,45 +51,45 @@ void handleChildTerm( int )
+ 	signal( SIGCHLD, handleChildTerm );
+ }
+ 
+-void spork()
++static void spork()
+ {
+ 	struct passwd *pwent;
+ 	int user_id, group_id;
+ 
+-	chdir( "/" );
+-
+-	if( fork()!=0 )
+-	{
+-		exit( 0 );
+-	}
++	daemon(0,0);
+ 
+-	setsid();
++	openlog("dhttpd",LOG_PID,LOG_DAEMON);
+ 
+ 	user_id = UID;
+ 	group_id = GID;
+-	
++
+ 	/* If we're the super user, set user id, if new id is different */
+ 	if( getuid()==0 && user_id!=0 )
+ 	{
+ 		/* Check password file */
+ 		if ( (pwent = getpwuid( user_id ) ) == NULL)
+ 		{
++			syslog(LOG_ERR,"User with UID %d does not have an entry in /etc/passwd"
++				,user_id);
+     			exit( 1 );
+ 		}
+ 
+ 		/* Reset groups attribute. */
+ 		if( initgroups( pwent->pw_name, group_id ) == -1 )
+ 		{
++			syslog(LOG_ERR,"Could not set up process groups (%m)");
+ 			exit( 1 );
+ 		}
+ 
+ 		/* Switch to our new user id.  We have to set the group first */
+ 		if( setgid( group_id )==-1 )
+ 		{
++			syslog(LOG_ERR,"Could not change GID to %d (%m)",group_id);
+ 			exit( 1 );
+ 		}
+ 		if( setuid( user_id )==-1 )
+ 		{
++			syslog(LOG_ERR,"Could not change UID to %d (%m)",user_id);
+ 			exit( 1 );
+ 		}
+ 	}
+@@ -91,10 +99,12 @@ int main( int argc, char *argv[] )
+ {
+ 	int o;
+ 	int portnum = DEFAULTPORT;
++	char *bind_addr = DEFAULTBINDADDR;
++	bool nofork=false;
+ 
+ 	for( ;; )
+ 	{
+-		o = getopt( argc, argv, "p:h" );
++		o = getopt( argc, argv, "p:b:hdr:" );
+ 		if( o==-1 )
+ 		{
+ 			break;
+@@ -109,27 +119,59 @@ int main( int argc, char *argv[] )
+ 			case 'h':
+ 				printf( "usage: %s [options]\n", argv[ 0 ] );
+ 				printf( "  -p (port)  Use a different port than the default of %i\n", DEFAULTPORT );
++				printf( "  -b         Bind to this address instead of %s\n", DEFAULTBINDADDR);
+ 				printf( "  -h         Help\n" );
++				printf( "  -d         Do not fork into Background on startup\n" );
+ 				return 0;
+ 
+ 			case 'p':
+ 				sscanf( optarg, "%i", &portnum );
+ 				break;
++			case 'b':
++				bind_addr = optarg;
++				break;
++			case 'r':
++			        if ( strlen(optarg) > ROOT_MAX_LEN )
++			        {
++				    //  Prevent overflows
++				    fprintf(stderr,
++					    "[ERROR] Too long WWW root path: %s\n"
++					    , optarg );
++
++				    exit(1);
++			        }
++
++			        if ( optarg[strlen(optarg) -1] == '/' )
++			        {
++				    fprintf(stderr,
++					    "[ERROR] No trailing slash allowed: %s\n"
++					    , optarg );
++				    exit(1);
++				}
++
++				sscanf( optarg, "%s", ROOT_DIR );
++				break;
++			case 'd':
++				nofork=true;
++				break;
+ 		}
+ 	}
+ 
+-	ListenSocket listen( portnum );
++	ListenSocket listen_socket( portnum, bind_addr );
+ 	pid_t pid;
+ 	int s;
+ 
+-	if( listen.geterror() )
++	if( listen_socket.geterror() )
+ 	{
+-		fprintf( stderr, "Could not open port %i.  %s failed to start\n", portnum, DHTTPDVERSION );
++		fprintf( stderr, "Could not listen on port %i.  %s failed to start\n", portnum, DHTTPDVERSION );
+ 		exit( 1 );
+ 	}
+ 
+-	/* now let's become a daemon */
+-	spork();
++	if(!nofork)
++	{
++		/* now let's become a daemon */
++		spork();
++	}
+ 
+ 	signal( SIGCHLD, handleChildTerm );
+ 	signal( SIGHUP, SIG_IGN );
+@@ -139,14 +181,14 @@ int main( int argc, char *argv[] )
+ 	{
+ 		if( numProc<MAXCHILDPROC )
+ 		{
+-			s = listen.newsock();
++			s = listen_socket.newsock();
+ 		}
+ 		else
+ 		{
+ 			s = -1;
+ 			sleep( 1 );
+ 		}
+-		
++
+ 		if( s!=-1 )
+ 		{
+ 			numProc++;
+@@ -154,8 +196,8 @@ int main( int argc, char *argv[] )
+ 			if( pid==0 )
+ 			{
+ 				/* Child process (fulfill request) */
+-				close( listen.getfd() );
+-				
++				close( listen_socket.getfd() );
++
+ 				/* Handle Socket */ {
+ 					HttpSocket sock( s );
+ 					if( !sock.geterror() )
+@@ -178,6 +220,9 @@ int main( int argc, char *argv[] )
+ 				close( s );
+ 			}
+ 		}
++		/* In case signals are lost */
++		while( waitpid(0, NULL, WNOHANG)>0 )
++			numProc--;
+ 	}
+ 
+ 	/* make compiler happy */
+diff --git a/src/socket.cc b/src/socket.cc
+index ac11e1a..d6650f5 100644
+--- a/src/socket.cc
++++ b/src/socket.cc
+@@ -24,10 +24,12 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <syslog.h>
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
++#include <arpa/inet.h>		/* inet_addr */
+ 
+ #include "socket.hh"
+ 
+@@ -76,35 +78,42 @@ Socket::~Socket()
+  * ListenSocket::ListenSocket():
+  *   Start up the socket listening routines
+  */
+-ListenSocket::ListenSocket( int port )
++ListenSocket::ListenSocket( int port, char *bind_addr )
+ {
+ 	int status;
+-	struct sockaddr_in sin;
++	struct sockaddr_in s_in;
+ 	int one;
+-  
++
+ 	status = 0;
+ 	one = 1;
+-	memset( &sin, 0, sizeof( sin ) );
+-	sin.sin_family = AF_INET;
+-	sin.sin_addr.s_addr = htonl( INADDR_ANY );
+-	sin.sin_port = htons( port );
++	memset( &s_in, 0, sizeof( s_in ) );
++	s_in.sin_family = AF_INET;
++	s_in.sin_addr.s_addr = inet_addr( bind_addr );
++	s_in.sin_port = htons( port );
+ 
+ 	sock = socket( AF_INET, SOCK_STREAM, 0 );
+- 
++
+ 	if( sock==-1 )
+ 	{
++		syslog(LOG_ERR,"Error creating socket (%m)");
+ 		status = 1;
+ 	}
+ 
+ 	if( !status )
+ 	{
+ 		status = setsockopt( sock, SOL_SOCKET, SO_REUSEADDR, (char*) &one, sizeof( one ) );
++		if(status)
++			syslog(LOG_ERR,"Error setting socket options (%m)");
+ 	}
+-  
++
+ 	if( !status )
+ 	{
+-		status = bind( sock, (struct sockaddr *) &sin, sizeof( sin ) );
+-	}	
++		status = bind( sock, (struct sockaddr *) &s_in, sizeof( s_in ) );
++		if(status)
++		{
++			syslog(LOG_ERR,"Error binding to port %d (%m)",port);
++		}
++	}
+ 	if( !status )
+ 	{
+ 		status = listen( sock, 5 );
+@@ -143,9 +152,9 @@ ListenSocket::~ListenSocket()
+  */
+ int ListenSocket::newsock()
+ {
+-	int cSidLen;
++	unsigned int cSidLen;
+ 	int s;
+-	
++
+ 	do
+ 	{
+ 		cSidLen = sizeof( cSid );
+diff --git a/src/socket.hh b/src/socket.hh
+index 4bfcd66..30ca9c2 100644
+--- a/src/socket.hh
++++ b/src/socket.hh
+@@ -30,7 +30,7 @@ public:
+ 	FILE *getio() { return io; }
+ 
+ 	Socket( int s );
+-	~Socket();
++	virtual ~Socket();
+ };
+ 
+ class ListenSocket
+@@ -39,10 +39,10 @@ class ListenSocket
+ 	int sock;
+ 
+ public:
+-	int geterror() { return sock==-1; }
++	int geterror() const { return sock==-1; }
+ 	int newsock();
+-	int getfd() { return sock; }
++	int getfd() const { return sock; }
+ 
+-	ListenSocket( int port );
++	ListenSocket( int port, char *bind_addr );
+ 	~ListenSocket();
+ };
+-- 
+1.5.3.8
+

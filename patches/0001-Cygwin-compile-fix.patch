@@ -1,0 +1,29 @@
+ src/main.cc   |    1 +
+ src/socket.cc |    2 +-
+ 2 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/src/main.cc b/src/main.cc
+index 221587e..c4f0f6c 100644
+--- a/src/main.cc
++++ b/src/main.cc
+@@ -17,6 +17,7 @@
+  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+  */
+ 
++#include <stdlib.h>
+ #include <errno.h>
+ #include <grp.h>
+ #include <pwd.h>
+diff --git a/src/socket.cc b/src/socket.cc
+index d6650f5..cb7a44e 100644
+--- a/src/socket.cc
++++ b/src/socket.cc
+@@ -152,7 +152,7 @@ ListenSocket::~ListenSocket()
+  */
+ int ListenSocket::newsock()
+ {
+-	unsigned int cSidLen;
++	socklen_t cSidLen;
+ 	int s;
+ 
+ 	do

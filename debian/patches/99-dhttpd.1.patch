@@ -1,0 +1,22 @@
+--- dhttpd-1.02a.orig/dhttpd.1
++++ dhttpd-1.02a/dhttpd.1
+@@ -1,6 +1,6 @@
+ .TH DHTTPD 1
+-.SH DHTTPD
+-dhttpd \- Minimal Webserver without Cgi-bin support.
++.SH NAME
++dhttpd \- Minimal webserver without cgi-bin support.
+ .SH SYNOPSIS
+ .B dhttpd
+ .I "[options]"
+@@ -20,6 +20,10 @@
+ .TP
+ .B \-p portnum
+ Set the port the web server runs on
++.B http://servername/
++The default location to serve files from it /var/www/. You will need an
++index.html if you want to be able to use exactly that location. If not you
++have to enter the file name too.
+ .SH AUTHOR
+ This manual page was written by Christoph Lameter <clameter@debian.org>,
+ for the Debian GNU/Linux system.
